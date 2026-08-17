@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>ESP Controller Manager</title>
+    <title>ESP Controller Manager (Remote Edition)</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #222; color: #fff; text-align: center; }
@@ -41,11 +41,17 @@
         <h2>Manager Kontroler ESP</h2>
         <div id="status" style="display:none; margin-bottom: 15px; color: #ffca28;"></div>
 
+        <!-- Form Konfigurasi Utama Localtonet -->
+        <div class="card">
+            <h3>Konfigurasi Akun Tunnel</h3>
+            <input type="password" id="api-token" placeholder="Masukkan Auth Token Localtonet Anda">
+        </div>
+
         <!-- Form Tambah Perangkat -->
         <div class="card">
-            <h3>Tambah / Hubungkan Perangkat</h3>
+            <h3>Tambah / Hubungkan Perangkat Jarak Jauh</h3>
             <input type="text" id="dev-name" placeholder="Nama Perangkat (cth: Lampu Teras)">
-            <input type="text" id="dev-ip" placeholder="IP Address (cth: 192.168.1.100)">
+            <input type="text" id="dev-ip" placeholder="IP Address Baru (cth: 192.168.1.100)">
             <button onclick="tambahDanHubungkan()" style="margin-top: 10px;">Simpan & Hubungkan</button>
         </div>
 
@@ -65,6 +71,9 @@
         // Memuat daftar perangkat saat pertama dibuka
         document.addEventListener("DOMContentLoaded", () => {
             renderDaftarPerangkat();
+            
+            // Tampilkan token lama jika sudah ada tersimpan di browser HP Anda
+            document.getElementById('api-token').value = localStorage.getItem("localtonet_token") || "";
             
             // Cek apakah ada perangkat aktif terakhir
             let activeId = localStorage.getItem("esp_active_id");
@@ -112,29 +121,74 @@
             });
         }
 
+        // MODIFIKASI UTAMA: Menghubungkan Form Input langsung ke API Server Localtonet
         function tambahDanHubungkan() {
+            let tokenInput = document.getElementById("api-token").value.trim();
             let nameInput = document.getElementById("dev-name").value.trim();
             let ipInput = document.getElementById("dev-ip").value.trim();
 
-            if (!nameInput || !ipInput) {
-                alert("Nama dan IP Perangkat tidak boleh kosong!");
+            if (!tokenInput || !nameInput || !ipInput) {
+                alert("Auth Token, Nama, dan IP Perangkat tidak boleh kosong!");
                 return;
             }
 
-            if (!ipInput.startsWith("http")) {
-                ipInput = "http://" + ipInput;
-            }
+            // Hilangkan "http://" jika user tidak sengaja mengetiknya di kolom IP
+            let cleanIp = ipInput.replace(/^https?:\/\//, '');
 
-            let devices = getDevices();
-            let newId = Date.now().toString();
-            devices.push({ id: newId, name: nameInput, ip: ipInput });
-            saveDevices(devices);
+            let statusEl = document.getElementById("status");
+            statusEl.innerText = "Mengirim perintah tanam IP ke Redmi 2...";
+            statusEl.style.display = "block";
 
-            document.getElementById("dev-name").value = "";
-            document.getElementById("dev-ip").value = "";
-            renderDaftarPerangkat();
+            // Simpan token ke storage agar tidak hilang saat reload halaman
+            localStorage.setItem("localtonet_token", tokenInput);
 
-            testKoneksi(ipInput, nameInput, newId);
+            // Data konfigurasi permintaan pembuatan tunnel baru
+            const requestBody = {
+                "TunnelType": "Http",
+                "LocalIp": cleanIp,
+                "LocalPort": 80,
+                "ServerCode": "us" // Bisa disesuaikan dengan server region akun Anda (sg, us, eu)
+            };
+
+            // Menembak REST API Localtonet v2
+            fetch("https://localtonet.com", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer " + tokenInput
+                },
+                body: JSON.stringify(requestBody)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Dapatkan URL publik acak baru yang berhasil dibuat untuk Redmi 2
+                    let urlPublikBaru = data.data.publicUrl;
+
+                    let devices = getDevices();
+                    let newId = Date.now().toString();
+                    
+                    // YANG DISIMPAN SEKARANG ADALAH URL PUBLIKNYA, BUKAN IP LOKALNYA LAGI
+                    devices.push({ id: newId, name: nameInput, ip: urlPublikBaru });
+                    saveDevices(devices);
+
+                    document.getElementById("dev-name").value = "";
+                    document.getElementById("dev-ip").value = "";
+                    statusEl.style.display = "none";
+                    renderDaftarPerangkat();
+
+                    // Langsung uji koneksi dan buka dashboard-nya
+                    testKoneksi(urlPublikBaru, nameInput, newId);
+                } else {
+                    statusEl.style.display = "none";
+                    alert("Gagal mendaftarkan ke server: " + data.message);
+                }
+            })
+            .catch(error => {
+                statusEl.style.display = "none";
+                console.error("API Error:", error);
+                alert("Gagal terhubung ke API Localtonet. Pastikan Auth Token Anda benar!");
+            });
         }
 
         function hapusPerangkat(id) {
@@ -147,11 +201,11 @@
 
         function testKoneksi(url, name, id) {
             let statusEl = document.getElementById("status");
-            statusEl.innerText = "Menghubungkan ke " + name + " (" + url + ")...";
+            statusEl.innerText = "Menghubungkan ke " + name + " via Tunnel...";
             statusEl.style.display = "block";
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 4000);
+            const timeoutId = setTimeout(() => controller.abort(), 5000); // Naikkan ke 5 detik untuk latency luar negeri
 
             fetch(url, { mode: 'no-cors', signal: controller.signal })
                 .then(() => {
@@ -161,32 +215,3 @@
                 })
                 .catch(() => {
                     clearTimeout(timeoutId);
-                    alert("Gagal terhubung ke " + name + "! Periksa koneksi Wi-Fi atau IP.");
-                    localStorage.removeItem("esp_active_id");
-                    keluarKeMenu();
-                });
-        }
-
-        function bukaDashboard(url, name) {
-            document.getElementById("main-ui").style.display = "none";
-            document.getElementById("connected-info").innerText = name + " (" + url + ")";
-            document.getElementById("navbar").style.display = "flex";
-            
-            const iframe = document.getElementById("esp-frame");
-            iframe.src = url;
-            iframe.style.display = "block";
-        }
-
-        function keluarKeMenu() {
-            localStorage.removeItem("esp_active_id");
-            document.getElementById("status").style.display = "none";
-            document.getElementById("main-ui").style.display = "block";
-            document.getElementById("navbar").style.display = "none";
-            
-            const iframe = document.getElementById("esp-frame");
-            iframe.style.display = "none";
-            iframe.src = "";
-        }
-    </script>
-</body>
-</html>
