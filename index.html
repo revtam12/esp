@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ESP Controller Manager</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #222; color: #fff; text-align: center; }
+        .container { padding: 30px 15px; max-width: 480px; margin: 0 auto; }
+        input, button { padding: 10px; margin: 6px 0; font-size: 15px; border-radius: 6px; border: none; box-sizing: border-box; }
+        input { width: 100%; background: #333; color: #fff; border: 1px solid #555; }
+        button { background-color: #007bff; color: white; cursor: pointer; width: 100%; font-weight: bold; }
+        button:hover { background-color: #0056b3; }
+        button.btn-danger { background-color: #dc3545; width: auto; padding: 6px 12px; font-size: 13px; }
+        button.btn-danger:hover { background-color: #bd2130; }
+        button.btn-connect { background-color: #28a745; width: auto; padding: 6px 12px; font-size: 13px; margin-right: 5px; }
+        button.btn-connect:hover { background-color: #218838; }
+
+        .card { background: #2c2c2c; border-radius: 8px; padding: 15px; margin-top: 15px; text-align: left; border: 1px solid #444; }
+        .card h3 { margin-top: 0; font-size: 16px; color: #ddd; border-bottom: 1px solid #444; padding-bottom: 8px; }
+
+        .device-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #3d3d3d; }
+        .device-item:last-child { border-bottom: none; }
+        .device-info { text-align: left; }
+        .device-name { font-weight: bold; font-size: 15px; color: #4da6ff; }
+        .device-ip { font-size: 12px; color: #aaa; margin-top: 2px; }
+
+        #navbar { display: none; background: #111; padding: 10px 20px; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; }
+        #esp-frame { width: 100%; height: calc(100vh - 55px); border: none; background: #fff; display: none; }
+    </style>
+</head>
+<body>
+
+    <!-- Bar Kontrol Atas Saat Terhubung -->
+    <div id="navbar">
+        <span id="connected-info" style="font-weight: bold; font-size: 14px;"></span>
+        <button class="btn-danger" onclick="keluarKeMenu()">Ganti Perangkat</button>
+    </div>
+
+    <!-- Halaman Utama / Manager Perangkat -->
+    <div id="main-ui" class="container">
+        <h2>Manager Kontroler ESP</h2>
+        <div id="status" style="display:none; margin-bottom: 15px; color: #ffca28;"></div>
+
+        <!-- Form Tambah Perangkat -->
+        <div class="card">
+            <h3>Tambah / Hubungkan Perangkat</h3>
+            <input type="text" id="dev-name" placeholder="Nama Perangkat (cth: Lampu Teras)">
+            <input type="text" id="dev-ip" placeholder="IP Address (cth: 192.168.1.100)">
+            <button onclick="tambahDanHubungkan()" style="margin-top: 10px;">Simpan & Hubungkan</button>
+        </div>
+
+        <!-- Daftar Perangkat Tersimpan -->
+        <div class="card">
+            <h3>Perangkat Tersimpan</h3>
+            <div id="device-list">
+                <div style="color: #888; font-size: 13px;">Belum ada perangkat tersimpan.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Frame Dashboard ESP -->
+    <iframe id="esp-frame"></iframe>
+
+    <script>
+        // Memuat daftar perangkat saat pertama dibuka
+        document.addEventListener("DOMContentLoaded", () => {
+            renderDaftarPerangkat();
+            
+            // Cek apakah ada perangkat aktif terakhir
+            let activeId = localStorage.getItem("esp_active_id");
+            if (activeId) {
+                let devices = getDevices();
+                let activeDev = devices.find(d => d.id == activeId);
+                if (activeDev) {
+                    testKoneksi(activeDev.ip, activeDev.name, activeDev.id);
+                }
+            }
+        });
+
+        function getDevices() {
+            return JSON.parse(localStorage.getItem("esp_devices") || "[]");
+        }
+
+        function saveDevices(devices) {
+            localStorage.setItem("esp_devices", JSON.stringify(devices));
+        }
+
+        function renderDaftarPerangkat() {
+            let devices = getDevices();
+            let container = document.getElementById("device-list");
+
+            if (devices.length === 0) {
+                container.innerHTML = `<div style="color: #888; font-size: 13px;">Belum ada perangkat tersimpan.</div>`;
+                return;
+            }
+
+            container.innerHTML = "";
+            devices.forEach(dev => {
+                let item = document.createElement("div");
+                item.className = "device-item";
+                item.innerHTML = `
+                    <div class="device-info">
+                        <div class="device-name">${dev.name}</div>
+                        <div class="device-ip">${dev.ip}</div>
+                    </div>
+                    <div>
+                        <button class="btn-connect" onclick="testKoneksi('${dev.ip}', '${dev.name}', '${dev.id}')">Buka</button>
+                        <button class="btn-danger" onclick="hapusPerangkat('${dev.id}')">Hapus</button>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        function tambahDanHubungkan() {
+            let nameInput = document.getElementById("dev-name").value.trim();
+            let ipInput = document.getElementById("dev-ip").value.trim();
+
+            if (!nameInput || !ipInput) {
+                alert("Nama dan IP Perangkat tidak boleh kosong!");
+                return;
+            }
+
+            if (!ipInput.startsWith("http")) {
+                ipInput = "http://" + ipInput;
+            }
+
+            let devices = getDevices();
+            let newId = Date.now().toString();
+            devices.push({ id: newId, name: nameInput, ip: ipInput });
+            saveDevices(devices);
+
+            document.getElementById("dev-name").value = "";
+            document.getElementById("dev-ip").value = "";
+            renderDaftarPerangkat();
+
+            testKoneksi(ipInput, nameInput, newId);
+        }
+
+        function hapusPerangkat(id) {
+            if (confirm("Yakin ingin menghapus perangkat ini dari daftar?")) {
+                let devices = getDevices().filter(d => d.id !== id);
+                saveDevices(devices);
+                renderDaftarPerangkat();
+            }
+        }
+
+        function testKoneksi(url, name, id) {
+            let statusEl = document.getElementById("status");
+            statusEl.innerText = "Menghubungkan ke " + name + " (" + url + ")...";
+            statusEl.style.display = "block";
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+            fetch(url, { mode: 'no-cors', signal: controller.signal })
+                .then(() => {
+                    clearTimeout(timeoutId);
+                    localStorage.setItem("esp_active_id", id);
+                    bukaDashboard(url, name);
+                })
+                .catch(() => {
+                    clearTimeout(timeoutId);
+                    alert("Gagal terhubung ke " + name + "! Periksa koneksi Wi-Fi atau IP.");
+                    localStorage.removeItem("esp_active_id");
+                    keluarKeMenu();
+                });
+        }
+
+        function bukaDashboard(url, name) {
+            document.getElementById("main-ui").style.display = "none";
+            document.getElementById("connected-info").innerText = name + " (" + url + ")";
+            document.getElementById("navbar").style.display = "flex";
+            
+            const iframe = document.getElementById("esp-frame");
+            iframe.src = url;
+            iframe.style.display = "block";
+        }
+
+        function keluarKeMenu() {
+            localStorage.removeItem("esp_active_id");
+            document.getElementById("status").style.display = "none";
+            document.getElementById("main-ui").style.display = "block";
+            document.getElementById("navbar").style.display = "none";
+            
+            const iframe = document.getElementById("esp-frame");
+            iframe.style.display = "none";
+            iframe.src = "";
+        }
+    </script>
+</body>
+</html>
